@@ -1,0 +1,4 @@
+
+msprime>=1.0
+tskit
+tsinfer
