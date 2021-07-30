@@ -5,6 +5,7 @@ import numpy as np
 import sgkit as sg
 import tskit
 import tsinfer
+import numcodecs
 
 
 @click.command()
@@ -66,61 +67,50 @@ def trees_to_vcf(infile, outfile):
 
 @click.command()
 @click.argument("infile", type=click.File("rb"))
-# TODO presumably this must be a directory for sgkit zarrs?
-@click.argument("outfile", type=click.Path())
+@click.argument("outfile", type=click.Path(exists=False))
 @click.option(
-    "--ploidy",
-    type=int,
-    default=2
-)
-@click.option(
-    "--contig-id",
-    type=str,
-    default="1",
-    help="The ID of the contig in the output."
-)
-@click.option(
-    "--max-alt-alleles",
-    type=int,
-    default=1,
-    help="The number of alt alleles in the output. Sites with more or less are truncated or padded to this length."
+    "--contig-id", type=str, default="1", help="The ID of the contig in the output."
 )
 @click.option(
     "--variant-chunk-size",
     type=int,
     default=10_000,
-    help="The size of chunks in the variants dimension."
+    help="The size of chunks in the variants dimension.",
 )
 @click.option(
     "--sample-chunk-size",
     type=int,
     default=1_000,
-    help="The size of chunks in the samples dimension."
+    help="The size of chunks in the samples dimension.",
 )
-def trees_to_sgkit_zarr(infile, outfile, ploidy, contig_id, max_alt_alleles, variant_chunk_size, sample_chunk_size):
+def trees_to_sgkit_zarr(
+    infile,
+    outfile,
+    contig_id,
+    variant_chunk_size,
+    sample_chunk_size,
+):
     """
     Convert the input tskit trees file to vcf.
     """
     ts = tskit.load(infile)
+    ploidies = set(len(individual.nodes) for individual in ts.individuals())
+    if len(ploidies) != 1:
+        raise ValueError("Mixed ploidy not support by converter")
+    ploidy = ploidies.pop()
+    individual_names = [f"tsk_{j}" for j in range(ts.num_individuals)]
 
-    if ts.num_samples % ploidy != 0:
-        raise ValueError("Sample size must be divisible by ploidy")
-    num_individuals = ts.num_samples // ploidy
-    individual_names = [f"tsk_{j}" for j in range(num_individuals)]
-
-    samples = ts.samples()
-    tables = ts.dump_tables()
-
-    # TODO: is there some way of finding max_alleles from ts?
-    max_alleles = max_alt_alleles + 1
+    site_position = ts.tables.sites.position
+    # This is a safe, but possibly over conservative bound.
+    max_alleles = 1 + max(len(site.mutations) for site in ts.sites())
 
     offset = 0
     first_variants_chunk = True
-    for variants_chunk in chunks_iterator(ts.variants(samples=samples), variant_chunk_size):
+    for variants_chunk in variant_chunks_bar(ts, variant_chunk_size):
         alleles = []
         genotypes = []
         for var in variants_chunk:
-            site_alleles = var.alleles
+            site_alleles = list(var.alleles)
             if len(site_alleles) > max_alleles:
                 site_alleles = site_alleles[:max_alleles]
             elif len(site_alleles) < max_alleles:
@@ -130,7 +120,7 @@ def trees_to_sgkit_zarr(infile, outfile, ploidy, contig_id, max_alt_alleles, var
 
         alleles = np.array(alleles).astype("O")
         genotypes = np.expand_dims(genotypes, axis=2)
-        genotypes = genotypes.reshape(-1, num_individuals, ploidy)
+        genotypes = genotypes.reshape(-1, ts.num_individuals, ploidy)
 
         n_variants_in_chunk = len(genotypes)
 
@@ -141,7 +131,7 @@ def trees_to_sgkit_zarr(infile, outfile, ploidy, contig_id, max_alt_alleles, var
             variant_contig_names=[contig_id],
             variant_contig=np.zeros(n_variants_in_chunk, dtype="i1"),
             # TODO: should this be i8?
-            variant_position=tables.sites.position[
+            variant_position=site_position[
                 offset : offset + n_variants_in_chunk
             ].astype("i4"),
             variant_allele=alleles,
@@ -149,17 +139,16 @@ def trees_to_sgkit_zarr(infile, outfile, ploidy, contig_id, max_alt_alleles, var
             call_genotype=genotypes,
             variant_id=variant_id,
         )
-        ds["variant_id_mask"] = (
-            ["variants"],
-            variant_id_mask,
-        )
+        ds["variant_id_mask"] = (["variants"], variant_id_mask)
 
         if first_variants_chunk:
             # Enforce uniform chunks in the variants dimension
             # Also chunk in the samples direction
             chunk_sizes = dict(variants=variant_chunk_size, samples=sample_chunk_size)
-            from numcodecs import Blosc, PackBits
-            compressor = Blosc(cname="zstd", clevel=7, shuffle=Blosc.AUTOSHUFFLE)
+
+            compressor = numcodecs.Blosc(
+                cname="zstd", clevel=7, shuffle=numcodecs.Blosc.AUTOSHUFFLE
+            )
             encoding = {}
             for var in ds.data_vars:
                 var_chunks = tuple(
@@ -168,7 +157,7 @@ def trees_to_sgkit_zarr(infile, outfile, ploidy, contig_id, max_alt_alleles, var
                 )
                 encoding[var] = dict(chunks=var_chunks, compressor=compressor)
                 if ds[var].dtype.kind == "b":
-                    encoding[var]["filters"] = [PackBits()]
+                    encoding[var]["filters"] = [numcodecs.PackBits()]
             ds.to_zarr(outfile, mode="w", encoding=encoding)
             first_variants_chunk = False
         else:
@@ -195,6 +184,13 @@ def chunks_iterator(iterator, n):
         yield itertools.chain([first], rest_of_chunk)  # concatenate the first item back
     if empty_iterator:
         yield iter([])
+
+
+def variant_chunks_bar(ts, variant_chunk_size):
+    num_chunks = ts.num_sites / variant_chunk_size
+    iterator = chunks_iterator(ts.variants(), variant_chunk_size)
+    with click.progressbar(iterator, length=num_chunks) as bar:
+        yield from bar
 
 
 @click.group()
