@@ -1,0 +1,6 @@
+click
+msprime>=1.0
+numcodecs
+git+https://github.com/pystatgen/sgkit.git#egg=sgkit
+tskit
+tsinfer
