@@ -58,10 +58,11 @@ class TreeSequenceVcfWriter:
     file-like object.
     """
 
-    def __init__(self, tree_sequence, contig_id="1"):
+    def __init__(self, tree_sequence, simulate_gq=False, contig_id="1"):
         self.tree_sequence = tree_sequence
         self.contig_id = contig_id
         self.samples = []
+        self.simulate_gq = simulate_gq
         ploidies = set()
         for ind in self.tree_sequence.individuals():
             self.samples.extend(ind.nodes)
@@ -84,6 +85,12 @@ class TreeSequenceVcfWriter:
         print(
             '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">', file=output
         )
+        if self.simulate_gq:
+            print(
+                '##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype Quality">',
+                file=output,
+            )
+
         vcf_samples = "\t".join(self.individual_names)
         print(
             "#CHROM",
@@ -106,19 +113,31 @@ class TreeSequenceVcfWriter:
         # Build the array for hold the text genotype VCF data and the indexes into
         # this array for when we're updating it.
         gt_array = []
-        indexes = []
+        gt_indexes = []
+        gq_indexes = []
         for _ in self.tree_sequence.individuals():
             for _ in range(self.ploidy):
-                indexes.append(len(gt_array))
+                gt_indexes.append(len(gt_array))
                 # First element here is a placeholder that we'll write the actual
                 # genotypes into when for each variant.
                 gt_array.extend([0, ord("|")])
-            gt_array[-1] = ord("\t")
+            if self.simulate_gq:
+                # TODO probably should be 2 digits for GQ
+                gt_array[-1] = ord(":")
+                gq_indexes.append(len(gt_array))
+                gt_array.extend([0, ord("\t")])
+            else:
+                gt_array[-1] = ord("\t")
         gt_array[-1] = ord("\n")
         gt_array = np.array(gt_array, dtype=np.int8)
-        indexes = np.array(indexes, dtype=int)
+        gt_indexes = np.array(gt_indexes, dtype=int)
+        gq_indexes = np.array(gq_indexes, dtype=int)
+        gq_values = np.zeros(self.tree_sequence.num_individuals, dtype=np.int8) + 3
 
-        for variant in self.tree_sequence.variants(samples=self.samples):
+        gt_format = "GT"
+        if self.simulate_gq:
+            gt_format += ":GQ"
+        for variant in variant_progress_bar(self.tree_sequence):
             if variant.num_alleles > 9:
                 raise ValueError("More than 9 alleles not currently supported.")
             if variant.has_missing_data:
@@ -135,15 +154,25 @@ class TreeSequenceVcfWriter:
                 ".",
                 "PASS",
                 ".",
-                "GT",
+                gt_format,
                 sep="\t",
                 end="\t",
                 file=output,
             )
-            gt_array[indexes] = variant.genotypes + ord("0")
+            gt_array[gt_indexes] = variant.genotypes + ord("0")
+            if self.simulate_gq:
+                rng = np.random.default_rng(pos)
+                gq_values[:] = rng.integers(1, 9, gq_values.shape)
+                gt_array[gq_indexes] = gq_values + ord("0")
             g_bytes = memoryview(gt_array).tobytes()
             g_str = g_bytes.decode()
             print(g_str, end="", file=output)
+
+
+def variant_progress_bar(ts):
+    iterator = ts.variants()
+    with click.progressbar(iterator, length=ts.num_sites) as bar:
+        yield from bar
 
 
 @click.command()
@@ -152,13 +181,14 @@ class TreeSequenceVcfWriter:
 @click.option(
     "--contig-id", type=str, default="1", help="The ID of the contig in the output."
 )
-def trees_to_vcf(infile, outfile, contig_id):
+@click.option("--simulate-gq", is_flag=True, help="Simulate GQ values")
+def trees_to_vcf(infile, outfile, contig_id, simulate_gq):
     """
     Convert the input tskit trees file to vcf.
     """
     ts = tskit.load(infile)
     # ts.write_vcf(outfile)
-    vcf_writer = TreeSequenceVcfWriter(ts, contig_id)
+    vcf_writer = TreeSequenceVcfWriter(ts, contig_id=contig_id, simulate_gq=simulate_gq)
     vcf_writer.write(outfile)
 
 

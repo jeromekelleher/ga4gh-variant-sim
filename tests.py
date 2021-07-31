@@ -58,19 +58,16 @@ class TestSgkitRoundTrip:
 
 
 class TestVcfRoundTrip:
-    def verify(self, ts):
+    def verify(self, ts, simulate_gq=False):
         with tempfile.TemporaryDirectory() as tmpdir:
             ts_path = pathlib.Path(tmpdir) / "ts.trees"
             vcf_path = pathlib.Path(tmpdir) / "out.vcf"
             ts.dump(ts_path)
             runner = click.testing.CliRunner()
-            result = runner.invoke(
-                simulator.trees_to_vcf,
-                [
-                    str(ts_path),
-                    str(vcf_path),
-                ],
-            )
+            args = [str(ts_path), str(vcf_path)]
+            if simulate_gq:
+                args.append("--simulate-gq")
+            result = runner.invoke(simulator.trees_to_vcf, args)
             assert result.exit_code == 0
 
             vcf = cyvcf2.VCF(vcf_path)
@@ -83,6 +80,10 @@ class TestVcfRoundTrip:
                         genotype[:2] == tsk_var.genotypes[offset : offset + 2]
                     )
                     offset += 2
+                if simulate_gq:
+                    assert np.all(vcf_var.gt_quals > 0)
+                else:
+                    assert np.all(vcf_var.gt_quals == -1)
 
     @pytest.mark.parametrize("n", [2, 5, 100])
     def test_short_genome(self, n):
@@ -97,3 +98,11 @@ class TestVcfRoundTrip:
         ts = msprime.sim_mutations(ts, 0.01, random_seed=2345)
         assert ts.num_mutations > 0
         self.verify(ts)
+
+
+    @pytest.mark.parametrize("n", [2, 5, 100])
+    def test_simulate_gq(self, n):
+        ts = msprime.sim_ancestry(n, sequence_length=100, random_seed=234)
+        ts = msprime.sim_mutations(ts, 0.1, random_seed=2345)
+        assert ts.num_mutations > 0
+        self.verify(ts, simulate_gq=True)
