@@ -52,17 +52,114 @@ def trees_to_tsinfer_zarr(infile, outfile):
     print(sd)
 
 
+class TreeSequenceVcfWriter:
+    """
+    Writes a VCF representation of the genotypes in tree sequence to a
+    file-like object.
+    """
+
+    def __init__(self, tree_sequence, contig_id="1"):
+        self.tree_sequence = tree_sequence
+        self.contig_id = contig_id
+        self.samples = []
+        ploidies = set()
+        for ind in self.tree_sequence.individuals():
+            self.samples.extend(ind.nodes)
+            ploidies.add(len(ind.nodes))
+        if len(ploidies) != 1:
+            raise ValueError("Mixed ploidy not supported")
+        self.ploidy = ploidies.pop()
+        self.individual_names = [
+            f"tsk_{j}" for j in range(tree_sequence.num_individuals)
+        ]
+        self.contig_length = int(tree_sequence.sequence_length)
+
+    def __write_header(self, output):
+        print("##fileformat=VCFv4.2", file=output)
+        print(f"##source=ga4gh-variant-simulator", file=output)
+        print('##FILTER=<ID=PASS,Description="All filters passed">', file=output)
+        print(
+            f"##contig=<ID={self.contig_id},length={self.contig_length}>", file=output
+        )
+        print(
+            '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">', file=output
+        )
+        vcf_samples = "\t".join(self.individual_names)
+        print(
+            "#CHROM",
+            "POS",
+            "ID",
+            "REF",
+            "ALT",
+            "QUAL",
+            "FILTER",
+            "INFO",
+            "FORMAT",
+            vcf_samples,
+            sep="\t",
+            file=output,
+        )
+
+    def write(self, output):
+        self.__write_header(output)
+
+        # Build the array for hold the text genotype VCF data and the indexes into
+        # this array for when we're updating it.
+        gt_array = []
+        indexes = []
+        for _ in self.tree_sequence.individuals():
+            for _ in range(self.ploidy):
+                indexes.append(len(gt_array))
+                # First element here is a placeholder that we'll write the actual
+                # genotypes into when for each variant.
+                gt_array.extend([0, ord("|")])
+            gt_array[-1] = ord("\t")
+        gt_array[-1] = ord("\n")
+        gt_array = np.array(gt_array, dtype=np.int8)
+        indexes = np.array(indexes, dtype=int)
+
+        for variant in self.tree_sequence.variants(samples=self.samples):
+            if variant.num_alleles > 9:
+                raise ValueError("More than 9 alleles not currently supported.")
+            if variant.has_missing_data:
+                raise ValueError("Missing data is not currently supported.")
+            pos = int(variant.site.position)
+            ref = variant.alleles[0]
+            alt = ",".join(variant.alleles[1:]) if len(variant.alleles) > 1 else "."
+            print(
+                self.contig_id,
+                pos,
+                ".",
+                ref,
+                alt,
+                ".",
+                "PASS",
+                ".",
+                "GT",
+                sep="\t",
+                end="\t",
+                file=output,
+            )
+            gt_array[indexes] = variant.genotypes + ord("0")
+            g_bytes = memoryview(gt_array).tobytes()
+            g_str = g_bytes.decode()
+            print(g_str, end="", file=output)
+
+
 @click.command()
 @click.argument("infile", type=click.File("rb"))
 @click.argument("outfile", type=click.File("w"))
-def trees_to_vcf(infile, outfile):
+@click.option(
+    "--contig-id", type=str, default="1", help="The ID of the contig in the output."
+)
+def trees_to_vcf(infile, outfile, contig_id):
     """
     Convert the input tskit trees file to vcf.
     """
     ts = tskit.load(infile)
-    # If we want to write out extra fields, we'll need to write our
-    # own code to output the VCF becauase tskit doesn't support this.
-    ts.write_vcf(outfile)
+    # ts.write_vcf(outfile)
+    vcf_writer = TreeSequenceVcfWriter(ts, contig_id)
+    vcf_writer.write(outfile)
 
 
 @click.command()
