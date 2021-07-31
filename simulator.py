@@ -122,7 +122,8 @@ class TreeSequenceVcfWriter:
                 # genotypes into when for each variant.
                 gt_array.extend([0, ord("|")])
             if self.simulate_gq:
-                # TODO probably should be 2 digits for GQ
+                # We simulate 1 digit GQ values for simplicity. We could extend to
+                # 2 digit easily enough.
                 gt_array[-1] = ord(":")
                 gq_indexes.append(len(gt_array))
                 gt_array.extend([0, ord("\t")])
@@ -161,12 +162,20 @@ class TreeSequenceVcfWriter:
             )
             gt_array[gt_indexes] = variant.genotypes + ord("0")
             if self.simulate_gq:
-                rng = np.random.default_rng(pos)
-                gq_values[:] = rng.integers(1, 9, gq_values.shape)
+                simulate_gq_values(pos, gq_values)
                 gt_array[gq_indexes] = gq_values + ord("0")
             g_bytes = memoryview(gt_array).tobytes()
             g_str = g_bytes.decode()
             print(g_str, end="", file=output)
+
+
+def simulate_gq_values(pos, array):
+    """
+    Simulate some GQ values and assign then into the specified array.
+    The pos value is used as a seed to make the generation deterministic.
+    """
+    rng = np.random.default_rng(pos)
+    array[:] = rng.integers(1, 9, array.shape)
 
 
 def variant_progress_bar(ts):
@@ -210,12 +219,14 @@ def trees_to_vcf(infile, outfile, contig_id, simulate_gq):
     default=1_000,
     help="The size of chunks in the samples dimension.",
 )
+@click.option("--simulate-gq", is_flag=True, help="Simulate GQ values")
 def trees_to_sgkit_zarr(
     infile,
     outfile,
     contig_id,
     variant_chunk_size,
     sample_chunk_size,
+    simulate_gq,
 ):
     """
     Convert the input tskit trees file to vcf.
@@ -227,7 +238,7 @@ def trees_to_sgkit_zarr(
     ploidy = ploidies.pop()
     individual_names = [f"tsk_{j}" for j in range(ts.num_individuals)]
 
-    site_position = ts.tables.sites.position
+    site_position = ts.tables.sites.position.astype(np.int32)
     # This is a safe, but possibly over conservative bound.
     max_alleles = 1 + max(len(site.mutations) for site in ts.sites())
 
@@ -253,20 +264,25 @@ def trees_to_sgkit_zarr(
 
         variant_id = np.full((n_variants_in_chunk), fill_value=".", dtype="O")
         variant_id_mask = variant_id == "."
+        variant_position = site_position[offset : offset + n_variants_in_chunk]
 
         ds = sg.create_genotype_call_dataset(
             variant_contig_names=[contig_id],
             variant_contig=np.zeros(n_variants_in_chunk, dtype="i1"),
-            # TODO: should this be i8?
-            variant_position=site_position[
-                offset : offset + n_variants_in_chunk
-            ].astype("i4"),
+            variant_position=variant_position,
             variant_allele=alleles,
             sample_id=np.array(individual_names).astype("U"),
             call_genotype=genotypes,
             variant_id=variant_id,
         )
         ds["variant_id_mask"] = (["variants"], variant_id_mask)
+        if simulate_gq:
+            gq_values = np.zeros(
+                (n_variants_in_chunk, ts.num_individuals), dtype=np.int8
+            )
+            for j, pos in enumerate(variant_position):
+                simulate_gq_values(pos, gq_values[j])
+            ds["call_GQ"] = (["variants", "samples"], gq_values)
 
         if first_variants_chunk:
             # Enforce uniform chunks in the variants dimension

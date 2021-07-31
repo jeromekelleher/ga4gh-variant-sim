@@ -6,6 +6,7 @@ import pytest
 import msprime
 import numpy as np
 import sgkit as sg
+import sgkit.io.vcf as sg_vcf
 import click.testing
 import cyvcf2
 
@@ -99,6 +100,51 @@ class TestVcfRoundTrip:
         assert ts.num_mutations > 0
         self.verify(ts)
 
+    @pytest.mark.parametrize("n", [2, 5, 100])
+    def test_simulate_gq(self, n):
+        ts = msprime.sim_ancestry(n, sequence_length=100, random_seed=234)
+        ts = msprime.sim_mutations(ts, 0.1, random_seed=2345)
+        assert ts.num_mutations > 0
+        self.verify(ts, simulate_gq=True)
+
+
+class TestSgkitVcfEqual:
+    def verify(self, ts, simulate_gq=False):
+        # Check that we get the same results when we go directly to sgkit
+        # as when we via VCF.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ts_path = pathlib.Path(tmpdir) / "ts.trees"
+            vcf_path = pathlib.Path(tmpdir) / "out.vcf"
+            sg_path = pathlib.Path(tmpdir) / "out.sgz"
+            ts.dump(ts_path)
+            runner = click.testing.CliRunner()
+            args = [str(ts_path), str(vcf_path)]
+            if simulate_gq:
+                args.append("--simulate-gq")
+            result = runner.invoke(simulator.trees_to_vcf, args)
+            assert result.exit_code == 0
+            args[1] = str(sg_path)
+            result = runner.invoke(simulator.trees_to_sgkit_zarr, args)
+            assert result.exit_code == 0
+
+            sg_vcf_path = pathlib.Path(tmpdir) / "converted.sgz"
+            fields = []
+            if simulate_gq:
+                fields.append("FORMAT/GQ")
+            sg_vcf.vcf_to_zarr(vcf_path, sg_vcf_path, fields=fields)
+
+            ds1 = sg.load_dataset(sg_path)
+            ds2 = sg.load_dataset(sg_vcf_path)
+            np.testing.assert_array_equal(ds1.call_genotype, ds2.call_genotype)
+            if simulate_gq:
+                np.testing.assert_array_equal(ds1.call_GQ, ds2.call_GQ)
+
+    @pytest.mark.parametrize("n", [2, 5, 100])
+    def test_genotypes(self, n):
+        ts = msprime.sim_ancestry(n, sequence_length=100, random_seed=234)
+        ts = msprime.sim_mutations(ts, 0.1, random_seed=2345)
+        assert ts.num_mutations > 0
+        self.verify(ts)
 
     @pytest.mark.parametrize("n", [2, 5, 100])
     def test_simulate_gq(self, n):
