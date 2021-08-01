@@ -8,7 +8,11 @@
 	python3 ../simulator.py trees-to-vcf --simulate-gq $< - | gzip > $@
 
 %.sgz: %.trees
-	python3 ../simulator.py trees-to-sgkit-zarr $< $@
+	python3 ../simulator.py trees-to-sgkit-zarr --variant-chunk-size=1000 $< $@
 
 %_GQ.sgz: %.trees
-	python3 ../simulator.py trees-to-sgkit-zarr --simulate-gq $< $@
+	python3 ../simulator.py trees-to-sgkit-zarr --variant-chunk-size=1000 --simulate-gq $< $@
+
+%.sav: %.vcf.gz
+	./sav import --phasing full $< $@
+	
