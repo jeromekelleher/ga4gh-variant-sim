@@ -14,5 +14,5 @@
 	python3 ../simulator.py trees-to-sgkit-zarr --variant-chunk-size=1000 --simulate-gq $< $@
 
 %.sav: %.vcf.gz
-	./sav import --phasing full $< $@
-	
+	./sav import -7 --phasing full $< $@
+
