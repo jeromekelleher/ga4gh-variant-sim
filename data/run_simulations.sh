@@ -2,5 +2,7 @@
 
 for k in `seq 2 7`; do
 	echo Simulate 10**$k
-	python3 ../simulator.py generate-trees -L 10 -p $k k"$k"_L10.trees
+    STEM=k"$k"_L20
+	python3 ../simulator.py generate-trees -L 20 -p $k $STEM.trees
+    make -j 2 $STEM.vcf.gz $STEM.sav $STEM.sgz
 done
