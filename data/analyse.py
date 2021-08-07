@@ -37,9 +37,9 @@ def process_files(source_pattern, output, suffix):
         vcf_path = pathlib.Path(stem + ".vcf.gz")
         sg_path = pathlib.Path(stem + ".sgz")
         ds = sg.load_dataset(sg_path)
-        # assert ts.num_individuals == ds.samples.shape[0]
-        # assert ts.num_sites == ds.variant_position.shape[0]
-        # assert np.array_equal(ds.variant_position, ts.tables.sites.position.astype(int))
+        assert ts.num_individuals == ds.samples.shape[0]
+        assert ts.num_sites == ds.variant_position.shape[0]
+        assert np.array_equal(ds.variant_position, ts.tables.sites.position.astype(int))
         data.append(
             {
                 "sequence_length": ts.sequence_length / 10**6,
