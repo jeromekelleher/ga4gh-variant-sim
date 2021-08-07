@@ -12,12 +12,19 @@ import tskit
 import click
 import sgkit as sg
 
+def get_file_size(file):
+    return file.stat().st_size
 
-def du(path):
-    result = subprocess.run(
-        f"du -s --bytes {path}", shell=True, check=True, capture_output=True
-    )
-    return int(result.stdout.split()[0])
+
+def get_dir_size(dir):
+    return sum(get_file_size(f) for f in dir.glob("**/*") if f.is_file())
+
+
+def du(file):
+    if file.is_file():
+        return get_file_size(file)
+    return get_dir_size(file)
+
 
 def to_GiB(num_bytes):
     return num_bytes / (1024 ** 3)
@@ -45,15 +52,15 @@ def process_files(source_pattern, output, suffix):
                 "sequence_length": ts.sequence_length / 10**6,
                 "num_samples": ts.num_individuals,
                 "num_sites": ts.num_sites,
-                "tsk_size": to_GiB(ts_path.stat().st_size),
-                "vcfgz_size": to_GiB(vcf_path.stat().st_size),
-                "sav_size": to_GiB(sav_path.stat().st_size),
+                "tsk_size": to_GiB(du(ts_path)),
+                "vcfgz_size": to_GiB(du(vcf_path)),
+                "sav_size": to_GiB(du(sav_path)),
                 "sgkit_size": to_GiB(du(sg_path)),
             }
         )
 
-    df = pd.DataFrame(data)
-    df.to_csv(output)
+        df = pd.DataFrame(data)
+        df.to_csv(output)
 
 
 @click.command()
