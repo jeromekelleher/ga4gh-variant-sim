@@ -2,7 +2,6 @@
 Analyse the generated files and plot benchmarks.
 """
 import pathlib
-import subprocess
 
 import humanize
 import matplotlib.pyplot as plt
@@ -11,6 +10,7 @@ import pandas as pd
 import tskit
 import click
 import sgkit as sg
+
 
 def get_file_size(file):
     return file.stat().st_size
@@ -49,7 +49,7 @@ def process_files(source_pattern, output, suffix):
         assert np.array_equal(ds.variant_position, ts.tables.sites.position.astype(int))
         data.append(
             {
-                "sequence_length": ts.sequence_length / 10**6,
+                "sequence_length": ts.sequence_length / 10 ** 6,
                 "num_samples": ts.num_individuals,
                 "num_sites": ts.num_sites,
                 "tsk_size": to_GiB(du(ts_path)),
@@ -70,13 +70,14 @@ def plot(datafile, output):
     df = pd.read_csv(datafile)
     print(df)
     L = df.sequence_length.unique()[0]
+    df = df.sort_values("num_samples")
 
     K = df["vcfgz_size"]
 
     fig, ax = plt.subplots(1, 1)
     plt.semilogx(df["num_samples"], df["vcfgz_size"] / K, ".-", label="vcf.gz")
     plt.semilogx(df["num_samples"], df["sav_size"] / K, ".-", label="sav")
-    plt.semilogx(df["num_samples"], df["sgkit_size"] / K, ".-", label="sgkit")
+    plt.semilogx(df["num_samples"], df["sgkit_size"] / K, ".-", label="zarr")
     plt.xlabel("Sample size (diploid)")
     plt.ylabel("File size relative to vcf.gz")
     plt.title(f"File sizes for {L}Mb of simulated ~human genotype data")
@@ -91,44 +92,6 @@ def plot(datafile, output):
             xycoords="data",
         )
 
-    # xytext = (18.0, 0)
-    # largest_n = np.array(df.num_samples)[-1]
-    # largest_value = np.array(df.tsk_size)[-1]
-    # ax.annotate(
-    #     f"{largest_value:.2f}",
-    #     textcoords="offset points",
-    #     xytext=xytext,
-    #     xy=(largest_n, largest_value),
-    #     xycoords="data",
-    # )
-
-    # largest_value = int(np.array(df.sav_size)[-1])
-    # ax.annotate(
-    #     f"{largest_value:d}",
-    #     textcoords="offset points",
-    #     xytext=xytext,
-    #     xy=(largest_n, largest_value / K[-1]),
-    #     xycoords="data",
-    # )
-
-    # largest_value = int(np.array(df.vcfgz_size)[-1])
-    # ax.annotate(
-    #     f"{largest_value:d}",
-    #     textcoords="offset points",
-    #     xytext=xytext,
-    #     xy=(largest_n, largest_value),
-    #     xycoords="data",
-    # )
-
-    # largest_value = int(np.array(df.sgkit_size)[-1])
-    # ax.annotate(
-    #     f"{largest_value:d}",
-    #     textcoords="offset points",
-    #     xytext=xytext,
-    #     xy=(largest_n, largest_value),
-    #     xycoords="data",
-    # )
-
     ax2 = ax.twiny()
     ax2.set_xlim(ax.get_xlim())
     ax2.set_xscale("log")
@@ -139,8 +102,6 @@ def plot(datafile, output):
     ax.legend()
     plt.tight_layout()
     plt.savefig(output)
-
-
 
 
 @click.group()
